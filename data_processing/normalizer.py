@@ -6,12 +6,14 @@ from .schema import map_columns, DEALS_SCHEMA, WORK_ORDERS_SCHEMA
 
 def parse_date_flexible(val: Any) -> Any:
     """
-    Parses dates flexibly, supporting standard formats, pandas timestamps,
-    and handles missing/invalid date values.
+    Parses dates flexibly, supporting standard ISO formats, Excel numbers,
+    and verbose JavaScript/Monday.com timestamps (e.g. 'Thu Feb 26 2026 ... GMT').
     """
     if pd.isna(val) or val is None:
         return pd.NaT
+
     val_str = str(val).strip()
+
     # Check for empty placeholders or header string leaks
     if not val_str or val_str.lower() in (
         "nan", "none", "null", "nat", "created date", "close date (a)",
@@ -19,6 +21,10 @@ def parse_date_flexible(val: Any) -> Any:
         "probable end date", "last invoice date", "data delivery date"
     ):
         return pd.NaT
+
+    # Strip verbose GMT / Timezone text from Monday.com exports
+    if " GMT" in val_str:
+        val_str = val_str.split(" GMT")[0].strip()
 
     try:
         return pd.to_datetime(val_str, errors="coerce")
