@@ -18,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling & Container Scroll Properties
+# Custom Styling & Autoscroll Anchor Behavior
 st.markdown("""
 <style>
     .stApp {
@@ -40,12 +40,38 @@ st.markdown("""
         padding: 16px;
         margin-bottom: 12px;
     }
-    /* Smooth native scroll on chat elements */
-    [data-testid="stVerticalBlockBorderWrapper"] {
+    /* Smooth scrolling behavior on main app container */
+    [data-testid="stMain"] {
         scroll-behavior: smooth;
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+def scroll_to_bottom():
+    """Injects JavaScript directly into the DOM to scroll to the newest message."""
+    st.markdown(
+        """
+        <div id="end-of-chat"></div>
+        <script>
+            function smoothScrollBottom() {
+                const target = window.parent.document.getElementById('end-of-chat') || document.getElementById('end-of-chat');
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                } else {
+                    const scrollContainer = window.parent.document.querySelector('[data-testid="stMain"]') || window.parent.document.querySelector('section.main');
+                    if (scrollContainer) {
+                        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                    }
+                }
+            }
+            setTimeout(smoothScrollBottom, 50);
+            setTimeout(smoothScrollBottom, 250);
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 # Initialize Session State values
 if "messages" not in st.session_state:
@@ -60,13 +86,13 @@ with st.sidebar:
     st.markdown("---")
 
     # Refresh data button
-    if st.button("🔄 Refresh data from monday.com", width='stretch'):
+    if st.button("🔄 Refresh data from monday.com", use_container_width=True):
         st.session_state.force_refresh = True
         st.toast("Refreshing data pipeline...", icon="🔄")
 
     st.markdown("---")
     st.subheader("📊 Leadership BI Actions")
-    if st.button("👑 Prepare Leadership Update", width='stretch'):
+    if st.button("👑 Prepare Leadership Update", use_container_width=True):
         st.session_state.messages.append({
             "role": "user", 
             "content": "Prepare this week's leadership update report."
@@ -118,14 +144,12 @@ with tab_chat:
     st.markdown("### Ask any business intelligence question")
     st.caption("e.g., 'What is the sum of deal values in the Mining sector?', 'Join our boards to show open deals linked to ongoing work orders', 'Prepare a leadership summary'")
 
-    # Dedicated scrollable container that anchors and auto-scrolls to the newest message
-    chat_container = st.container(height=520)
-    with chat_container:
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                if "data" in msg and msg["data"] is not None:
-                    st.dataframe(msg["data"], width='stretch')
+    # Display Message History
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "data" in msg and msg["data"] is not None:
+                st.dataframe(msg["data"], use_container_width=True)
 
     # Handle quick-action trigger if last message was from user
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
@@ -133,33 +157,36 @@ with tab_chat:
         
         # Only answer if assistant has not already appended a response
         if len(st.session_state.messages) % 2 != 0:
-            with chat_container:
-                with st.chat_message("assistant"):
-                    with st.spinner("BI Agent is executing query plans..."):
-                        response = orchestrator.answer_query(user_query)
-                        st.markdown(response["answer"])
-                        df_res = response.get("data")
-                        if df_res is not None:
-                            st.dataframe(df_res, width='stretch')
-                        
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": response["answer"],
-                            "data": df_res
-                        })
+            with st.chat_message("assistant"):
+                with st.spinner("BI Agent is executing query plans..."):
+                    response = orchestrator.answer_query(user_query)
+                    st.markdown(response["answer"])
+                    df_res = response.get("data")
+                    if df_res is not None:
+                        st.dataframe(df_res, use_container_width=True)
+                    
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response["answer"],
+                        "data": df_res
+                    })
+            scroll_to_bottom()
             st.rerun()
+
+    # Anchor at the end of the history
+    scroll_to_bottom()
 
 with tab_preview:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Deals Board Data")
         st.metric("Total Deal Items", len(deals_df))
-        st.dataframe(deals_df, width='stretch')
+        st.dataframe(deals_df, use_container_width=True)
         
     with col2:
         st.subheader("Work Orders Board Data")
         st.metric("Total Work Order Items", len(wo_df))
-        st.dataframe(wo_df, width='stretch')
+        st.dataframe(wo_df, use_container_width=True)
 
 with tab_quality:
     st.markdown("### 🛡️ Data Quality Diagnostics Panel")
@@ -193,7 +220,7 @@ with tab_quality:
 # Pinned Bottom Chat Input
 if prompt := st.chat_input("Ask a question about deals or project executions..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with chat_container:
+    with tab_chat:
         with st.chat_message("user"):
             st.markdown(prompt)
 
@@ -203,11 +230,11 @@ if prompt := st.chat_input("Ask a question about deals or project executions..."
                 st.markdown(response["answer"])
                 df_res = response.get("data")
                 if df_res is not None:
-                    st.dataframe(df_res, width='stretch')
+                    st.dataframe(df_res, use_container_width=True)
 
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": response["answer"],
                     "data": df_res
                 })
-    st.rerun()
+        scroll_to_bottom()
