@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import sys
 import os
@@ -19,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling
+# Custom Styling & Autoscroll Anchor Behavior
 st.markdown("""
 <style>
     .stApp {
@@ -41,26 +40,37 @@ st.markdown("""
         padding: 16px;
         margin-bottom: 12px;
     }
+    /* Smooth scrolling behavior on main app container */
+    [data-testid="stMain"] {
+        scroll-behavior: smooth;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 
 def scroll_to_bottom():
-    """Injects JavaScript to smoothly scroll the window to the newest message."""
-    js = """
-    <script>
-        setTimeout(function() {
-            const mainSection = window.parent.document.querySelector('section.main');
-            if (mainSection) {
-                mainSection.scrollTo({
-                    top: mainSection.scrollHeight,
-                    behavior: 'smooth'
-                });
+    """Injects JavaScript directly into the DOM to scroll to the newest message."""
+    st.markdown(
+        """
+        <div id="end-of-chat"></div>
+        <script>
+            function smoothScrollBottom() {
+                const target = window.parent.document.getElementById('end-of-chat') || document.getElementById('end-of-chat');
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                } else {
+                    const scrollContainer = window.parent.document.querySelector('[data-testid="stMain"]') || window.parent.document.querySelector('section.main');
+                    if (scrollContainer) {
+                        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                    }
+                }
             }
-        }, 150);
-    </script>
-    """
-    components.html(js, height=0, width=0)
+            setTimeout(smoothScrollBottom, 50);
+            setTimeout(smoothScrollBottom, 250);
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # Initialize Session State values
@@ -91,10 +101,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("LLM Configuration")
+    providers = ["openai", "groq", "anthropic"]
+    default_idx = providers.index(settings.LLM_PROVIDER) if settings.LLM_PROVIDER in providers else 0
     llm_provider = st.selectbox(
         "LLM Provider",
-        ["openai", "groq", "anthropic"],
-        index=["openai", "groq", "anthropic"].index(settings.LLM_PROVIDER) if settings.LLM_PROVIDER in ["openai", "groq", "anthropic"] else 0
+        providers,
+        index=default_idx
     )
     llm_model = st.text_input("LLM Model", value=settings.LLM_MODEL)
     
@@ -140,10 +152,10 @@ with tab_chat:
                 st.dataframe(msg["data"], use_container_width=True)
 
     # Handle quick-action trigger if last message was from user
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user" and (len(st.session_state.messages) == 1 or st.session_state.messages[-2]["role"] != "user"):
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         user_query = st.session_state.messages[-1]["content"]
         
-        # Avoid duplicate re-execution if already answered
+        # Only answer if assistant has not already appended a response
         if len(st.session_state.messages) % 2 != 0:
             with st.chat_message("assistant"):
                 with st.spinner("BI Agent is executing query plans..."):
@@ -160,6 +172,9 @@ with tab_chat:
                     })
             scroll_to_bottom()
             st.rerun()
+
+    # Anchor at the end of the history
+    scroll_to_bottom()
 
 with tab_preview:
     col1, col2 = st.columns(2)
