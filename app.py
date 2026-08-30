@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import sys
 import os
@@ -18,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Premium Styling
+# Custom Styling
 st.markdown("""
 <style>
     .stApp {
@@ -43,6 +44,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+def scroll_to_bottom():
+    """Injects JavaScript to smoothly scroll the window to the newest message."""
+    js = """
+    <script>
+        setTimeout(function() {
+            const mainSection = window.parent.document.querySelector('section.main');
+            if (mainSection) {
+                mainSection.scrollTo({
+                    top: mainSection.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }
+        }, 150);
+    </script>
+    """
+    components.html(js, height=0, width=0)
+
+
 # Initialize Session State values
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -63,7 +83,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 Leadership BI Actions")
     if st.button("👑 Prepare Leadership Update", use_container_width=True):
-        # Insert a chat query message to execute leadership tool
         st.session_state.messages.append({
             "role": "user", 
             "content": "Prepare this week's leadership update report."
@@ -74,8 +93,8 @@ with st.sidebar:
     st.subheader("LLM Configuration")
     llm_provider = st.selectbox(
         "LLM Provider",
-        ["openai", "anthropic"],
-        index=0 if settings.LLM_PROVIDER == "openai" else 1
+        ["openai", "groq", "anthropic"],
+        index=["openai", "groq", "anthropic"].index(settings.LLM_PROVIDER) if settings.LLM_PROVIDER in ["openai", "groq", "anthropic"] else 0
     )
     llm_model = st.text_input("LLM Model", value=settings.LLM_MODEL)
     
@@ -98,7 +117,6 @@ try:
         orchestrator=orchestrator, 
         force_refresh=st.session_state.force_refresh
     )
-    # Reset refresh flag
     st.session_state.force_refresh = False
 except Exception as e:
     st.error(f"Error loading database boards: {e}")
@@ -114,54 +132,34 @@ with tab_chat:
     st.markdown("### Ask any business intelligence question")
     st.caption("e.g., 'What is the sum of deal values in the Mining sector?', 'Join our boards to show open deals linked to ongoing work orders', 'Prepare a leadership summary'")
 
-    # Show message history
+    # Display Message History
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if "data" in msg and msg["data"] is not None:
                 st.dataframe(msg["data"], use_container_width=True)
 
-    # If the last message is from user (e.g. from the quick action button click), trigger reply
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    # Handle quick-action trigger if last message was from user
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user" and (len(st.session_state.messages) == 1 or st.session_state.messages[-2]["role"] != "user"):
         user_query = st.session_state.messages[-1]["content"]
-        with st.chat_message("assistant"):
-            with st.spinner("BI Agent is executing query plans..."):
-                response = orchestrator.answer_query(user_query)
-                st.markdown(response["answer"])
-                df_res = response.get("data")
-                if df_res is not None:
-                    st.dataframe(df_res, use_container_width=True)
-                
-                # Append assistant message
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": response["answer"],
-                    "data": df_res
-                })
-        st.rerun()
-
-    # Standard Chat Input
-    if prompt := st.chat_input("Ask a question about deals or project executions..."):
-        # Append user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Generate assistant response
-        with st.chat_message("assistant"):
-            with st.spinner("BI Agent is executing query plans..."):
-                response = orchestrator.answer_query(prompt)
-                st.markdown(response["answer"])
-                df_res = response.get("data")
-                if df_res is not None:
-                    st.dataframe(df_res, use_container_width=True)
-
-                # Save assistant message
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": response["answer"],
-                    "data": df_res
-                })
+        
+        # Avoid duplicate re-execution if already answered
+        if len(st.session_state.messages) % 2 != 0:
+            with st.chat_message("assistant"):
+                with st.spinner("BI Agent is executing query plans..."):
+                    response = orchestrator.answer_query(user_query)
+                    st.markdown(response["answer"])
+                    df_res = response.get("data")
+                    if df_res is not None:
+                        st.dataframe(df_res, use_container_width=True)
+                    
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response["answer"],
+                        "data": df_res
+                    })
+            scroll_to_bottom()
+            st.rerun()
 
 with tab_preview:
     col1, col2 = st.columns(2)
@@ -203,3 +201,25 @@ with tab_quality:
                 st.success("✅ 100% data completion. No issues found.")
     else:
         st.info("No data available for quality scans. Check your Monday.com setup configuration.")
+
+# Pinned Bottom Chat Input
+if prompt := st.chat_input("Ask a question about deals or project executions..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with tab_chat:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("BI Agent is executing query plans..."):
+                response = orchestrator.answer_query(prompt)
+                st.markdown(response["answer"])
+                df_res = response.get("data")
+                if df_res is not None:
+                    st.dataframe(df_res, use_container_width=True)
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response["answer"],
+                    "data": df_res
+                })
+        scroll_to_bottom()
