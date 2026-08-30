@@ -26,7 +26,8 @@ class LLMClient:
 
         if not self.is_mock:
             if self.provider == "groq":
-                self.model = self.model or "llama-3.3-70b-versatile"
+                # Use standard, universally enabled Groq model
+                self.model = self.model if (self.model and "gpt" not in self.model) else "llama-3.1-8b-instant"
                 self.client = OpenAI(
                     api_key=self.api_key,
                     base_url="https://api.groq.com/openai/v1"
