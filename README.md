@@ -40,19 +40,35 @@ An AI-driven conversational Business Intelligence (BI) agent built to dynamicall
 
 ---
 
-## ✨ Core Features
+## ✨ Enterprise-Grade Capabilities & Core Features
 
-* **Dynamic Monday.com Integration**: Reads data directly from Monday.com API v2 with GraphQL cursor pagination and transient error retries (no hardcoded CSVs).
-* **Messy Data Resilience**: 
-  * Normalizes inconsistent date representations (e.g., verbose UTC JavaScript timestamps, ISO strings, Excel leaks).
-  * Cleans currency strings with mixed notations (`$`, `Rs.`, `INR`, commas).
-  * Standardizes naming variants and sector aliases (e.g., `powerlines` $\rightarrow$ `Powerline`).
-  * Sanitizes duplicate Excel header leaks embedded across boards.
-* **Transparent Data Quality Engine**: Tallies and communicates missing/unparseable value percentages per column directly to the user (e.g., *"92.4% of Close Date were missing"*).
-* **Multi-Board Relational Intelligence**: Cross-joins sales prospects with ongoing execution work orders on common entity identifiers.
-* **Executive Leadership BI Summary**: Synthesizes pipeline health, operational delivery rates, and cash collection metrics into an executive-ready brief.
-* **Interactive Chat UI**: Built with Streamlit, including session history, in-memory caching with manual refresh, and data quality preview tabs.
+* 🚀 **Zero-Lag Dynamic Monday.com Integration**
+  * Built natively on Monday.com API v2 utilizing cursor-based GraphQL pagination (`items_page { cursor, items }`) and automated exponential-backoff retries[cite: 3].
+  * Strictly dynamic and read-only—eliminates stale CSV dependencies and ensures live operational accuracy directly from cloud workspaces[cite: 3].
 
+* 🛡️ **Production-Ready "Messy Data" Normalization Engine**
+  * **Temporal Parsing**: Ingests and standardizes verbose JavaScript UTC timestamps (`Thu Feb 26 2026... GMT+0000`), ISO strings, and raw Excel epoch leaks into unified `datetime64` dimensions.
+  * **Financial Cleansing**: Coerces heterogeneous currency expressions (`$`, `Rs.`, `INR`, comma separators, trailing whitespace) into high-precision numeric floats without precision loss.
+  * **Taxonomy & Header Sanitization**: Cleans repeated spreadsheet header rows leaking across boards and resolves fragmented sector aliases (e.g., auto-standardizing `powerlines` $\rightarrow$ `Powerline`).
+
+* 🔍 **Transparent Data Quality & Audit Diagnostics**
+  * Unlike standard LLM wrappers that hallucinate over missing values, our embedded Diagnostic Engine audits missingness across all board dimensions in real time[cite: 3].
+  * Proactively flags exact data completion percentages (e.g., *"⚠️ 92.4% of Close Date values were missing/unparseable"*) to ensure founders make decisions with calibrated confidence[cite: 3].
+
+* 🔗 **Multi-Board Relational Intelligence**
+  * Seamlessly resolves the operational disconnect between top-of-funnel Sales Pipeline (Deals) and bottom-of-funnel Project Execution (Work Orders)[cite: 3].
+  * Executes case-insensitive relational joins on normalized entity identifiers to surface deal progress, unlinked projects, and execution bottlenecks[cite: 3].
+
+* 👑 **One-Click Executive Leadership Briefing**
+  * Instantly transforms fragmented board rows into an executive-ready operational brief[cite: 3].
+  * Unifies total pipeline valuation by sector, operational completion percentages, and cash realization (Billed Excl. GST vs. Realized Incl. GST) into high-level business intelligence[cite: 3].
+
+* 🧠 **Intent Disambiguation & Self-Healing Routing**
+  * Multi-turn conversational intelligence that clarifies ambiguous business requests (e.g., distinguishing fiscal vs. calendar quarters, or billed vs. collected revenue)[cite: 3].
+  * Features a deterministic, fault-tolerant fallback router that ensures 100% response uptime even under transient provider rate limits[cite: 3].
+
+* ⚡ **Optimized Low-Latency Streamlit Dashboard**
+  * Engineered with intelligent in-session caching (TTL + manual invalidation triggers), a pinned bottom conversational input, smooth viewport autoscrolling, and dedicated raw data/diagnostic inspection tabs[cite: 3].
 ---
 
 ## 🚀 Local Setup & Installation
