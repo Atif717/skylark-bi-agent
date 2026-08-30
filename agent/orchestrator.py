@@ -66,6 +66,8 @@ class AgentOrchestrator:
         # Choose API Key based on provider
         if self.provider == "openai":
             api_key = settings.OPENAI_API_KEY
+        elif self.provider == "groq":
+            api_key = settings.OPENAI_API_KEY  # or groq key passed via env/secrets
         else:
             api_key = settings.ANTHROPIC_API_KEY
 
@@ -75,6 +77,9 @@ class AgentOrchestrator:
         os.makedirs(CACHE_DIR, exist_ok=True)
 
     def get_deals_dataframe(self, force_refresh=False) -> pd.DataFrame:
+        """
+        Loads Deals from cache if within TTL, else fetches from Monday API and updates cache.
+        """
         cache_path = os.path.join(CACHE_DIR, "deals.json")
         
         if not force_refresh and os.path.exists(cache_path):
@@ -87,6 +92,7 @@ class AgentOrchestrator:
                 except Exception as e:
                     logger.warning(f"Error loading deals cache: {e}. Re-fetching.")
 
+        # Fetch and write cache
         raw_deals = get_deals(self.monday_client, self.deals_board_id)
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -97,6 +103,9 @@ class AgentOrchestrator:
         return normalize_deals(raw_deals)
 
     def get_work_orders_dataframe(self, force_refresh=False) -> pd.DataFrame:
+        """
+        Loads Work Orders from cache if within TTL, else fetches from Monday API and updates cache.
+        """
         cache_path = os.path.join(CACHE_DIR, "work_orders.json")
         
         if not force_refresh and os.path.exists(cache_path):
@@ -109,6 +118,7 @@ class AgentOrchestrator:
                 except Exception as e:
                     logger.warning(f"Error loading work orders cache: {e}. Re-fetching.")
 
+        # Fetch and write cache
         raw_wo = get_work_orders(self.monday_client, self.work_orders_board_id)
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -119,6 +129,10 @@ class AgentOrchestrator:
         return normalize_work_orders(raw_wo)
 
     def answer_query(self, user_query: str) -> dict:
+        """
+        Processes a user query by coordinating LLM planning, executing tools,
+        and generating a final response with warnings.
+        """
         try:
             deals_df = self.get_deals_dataframe()
             wo_df = self.get_work_orders_dataframe()
@@ -129,6 +143,7 @@ class AgentOrchestrator:
                 "data": None
             }
 
+        # Generate data quality checks
         deals_quality = check_data_quality(deals_df, "Deals Board")
         wo_quality = check_data_quality(wo_df, "Work Orders Board")
 
@@ -140,14 +155,14 @@ class AgentOrchestrator:
             
             if not decision:
                 # Fallback rule-based matching if LLM quota exceeded or invalid response
-                q_lower = user_query.lower()
-                if "leadership" in q_lower or "update" in q_lower:
+                q_lower = user_query.lower().strip()
+                if any(k in q_lower for k in ["leadership", "update", "summary", "brief", "overview", "report"]):
                     decision = {"tool": "generate_leadership_summary", "parameters": {}}
-                elif "join" in q_lower or "linked" in q_lower:
+                elif any(k in q_lower for k in ["join", "linked", "connected", "combine"]):
                     decision = {"tool": "join_deals_and_orders", "parameters": {}}
-                elif "sum" in q_lower or "total" in q_lower or "aggregate" in q_lower:
+                elif any(k in q_lower for k in ["sum", "total", "aggregate", "average", "mean"]):
                     decision = {"tool": "aggregate", "parameters": {"group_by": "sector", "metric": "deal_value"}}
-                elif "work order" in q_lower or "project" in q_lower:
+                elif any(k in q_lower for k in ["work order", "execution", "project", "order"]):
                     decision = {"tool": "filter_work_orders", "parameters": {}}
                 else:
                     decision = {"tool": "filter_deals", "parameters": {}}
@@ -161,6 +176,7 @@ class AgentOrchestrator:
         tool = decision.get("tool")
         params = decision.get("parameters", {})
 
+        # Handle clarifying questions directly (Step 6 requirement)
         if tool == "ask_clarifying_question":
             return {
                 "answer": params.get("question", "Could you please clarify your request?"),
@@ -174,6 +190,7 @@ class AgentOrchestrator:
                 "data": None
             }
 
+        # Tool Execution Stage
         result_df = None
         caveats = "None flagged."
         
@@ -194,7 +211,14 @@ class AgentOrchestrator:
                 group_col = params.get("group_by", "sector")
                 metric_col = params.get("metric", "deal_value")
                 
-                if group_col in deals_df.columns or metric_col in deals_df.columns:
+                # Check metric location first to select the correct board
+                if metric_col in wo_df.columns and metric_col not in deals_df.columns:
+                    target_df = wo_df
+                    target_reports = wo_quality["reports"]
+                elif metric_col in deals_df.columns and metric_col not in wo_df.columns:
+                    target_df = deals_df
+                    target_reports = deals_quality["reports"]
+                elif group_col in deals_df.columns:
                     target_df = deals_df
                     target_reports = deals_quality["reports"]
                 else:
