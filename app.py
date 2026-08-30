@@ -53,18 +53,25 @@ def scroll_to_bottom():
     Scrolls the chat container to the bottom.
     Must use components.html (real iframe) — st.markdown's <script> tags
     are inserted via innerHTML and browsers never execute those.
+
+    The hidden scroll-nonce comment (tied to message count) forces the
+    injected HTML to be unique on every rerun. Without it, Streamlit
+    detects identical content and reuses the same iframe instead of
+    reloading it, so the <script> only ever fires on the very first run.
     """
+    msg_count = len(st.session_state.get("messages", []))
     components.html(
-        """
+        f"""
+        <!-- scroll-nonce:{msg_count} -->
         <script>
-            function scrollToBottom() {
+            function scrollToBottom() {{
                 const doc = window.parent.document;
                 const container = doc.querySelector('[data-testid="stMain"]')
                                 || doc.querySelector('section.main');
-                if (container) {
-                    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-                }
-            }
+                if (container) {{
+                    container.scrollTo({{ top: container.scrollHeight, behavior: 'smooth' }});
+                }}
+            }}
             setTimeout(scrollToBottom, 100);
             setTimeout(scrollToBottom, 350);
         </script>
