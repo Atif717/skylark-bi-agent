@@ -6,36 +6,37 @@ An AI-driven conversational Business Intelligence (BI) agent built to dynamicall
 
 ## 🏗️ System Architecture
 
-                              ┌───────────────────────────┐
-                              │      Monday.com API       │
-                              │ (Deals & Work Orders)     │
-                              └─────────────┬─────────────┘
-                                            │ GraphQL / Cursor Pagination
-                                            ▼
-                ┌──────────────────────────────────────────────────────────────────┐
-                │                                Data Processing Layer              │
-                │  ┌───────────────────────┐  ┌──────────────────────────┐  ┌─────────────────────────┐  │
-                │  │     Schema Mapper     │  │  Normalizer & Cleaner    │  │   Data Quality Engine   │  │
-                │  │ (Internal IDs ➔ Keys) │  │  (Dates, Currency, Text) │  │   (Missing Data Tally)  │  │
-                │  └───────────────────────┘  └──────────────────────────┘  └─────────────────────────┘  │
-                └───────────────────────────────────────────────┬────────────────────────────────────────┘
-                                                                │ Clean DataFrames + Quality Caveats
-                                                                ▼
-                ┌────────────────────────────────────────────────────────────────────────────────────────┐
-                │                                  Agent & Tool Layer                                    │
-                │  ┌────────────────────┐  ┌─────────────────────────┐  ┌─────────────────────────────┐  │
-                │  │   filter_deals     │  │   filter_work_orders    │  │   join_deals_and_orders     │  │
-                │  ├────────────────────┤  ├─────────────────────────┤  ├─────────────────────────────┤  │
-                │  │   aggregate        │  │  leadership_summary     │  │   Ambiguity Clarifier       │  │
-                │  └────────────────────┘  └─────────────────────────┘  └─────────────────────────────┘  │
-                └───────────────────────────────────────────────┬────────────────────────────────────────┘
-                                                                │ Function Calling Loop
-                                                                ▼
-                ┌────────────────────────────────────────────────────────────────────────────────────────┐
-                │                         User Interface (Streamlit Cloud)                               │
-                │            Chat Assistant  │  Data Quality Diagnostics  │  Leadership Actions          │
-                └────────────────────────────────────────────────────────────────────────────────────────┘
-
+```
+                                  ┌───────────────────────────┐
+                                  │      Monday.com API       │
+                                  │ (Deals & Work Orders)     │
+                                  └─────────────┬─────────────┘
+                                                │ GraphQL / Cursor Pagination
+                                                ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                Data Processing Layer                                   │
+│  ┌───────────────────────┐  ┌──────────────────────────┐  ┌─────────────────────────┐  │
+│  │     Schema Mapper     │  │  Normalizer & Cleaner    │  │   Data Quality Engine   │  │
+│  │ (Internal IDs ➔ Keys) │  │  (Dates, Currency, Text) │  │   (Missing Data Tally)  │  │
+│  └───────────────────────┘  └──────────────────────────┘  └─────────────────────────┘  │
+└───────────────────────────────────────────────┬────────────────────────────────────────┘
+                                                │ Clean DataFrames + Quality Caveats
+                                                ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                  Agent & Tool Layer                                    │
+│  ┌────────────────────┐  ┌─────────────────────────┐  ┌─────────────────────────────┐  │
+│  │   filter_deals     │  │   filter_work_orders    │  │   join_deals_and_orders     │  │
+│  ├────────────────────┤  ├─────────────────────────┤  ├─────────────────────────────┤  │
+│  │   aggregate        │  │  leadership_summary     │  │   Ambiguity Clarifier       │  │
+│  └────────────────────┘  └─────────────────────────┘  └─────────────────────────────┘  │
+└───────────────────────────────────────────────┬────────────────────────────────────────┘
+                                                │ Function Calling Loop
+                                                ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                         User Interface (Streamlit Cloud)                               │
+│            Chat Assistant  │  Data Quality Diagnostics  │  Leadership Actions          │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -56,32 +57,90 @@ An AI-driven conversational Business Intelligence (BI) agent built to dynamicall
 
 ## 🚀 Local Setup & Installation
 
+### Prerequisites
+* **Python 3.10+** (Python 3.11 recommended)
+* **Git**
+* A **Monday.com API Token**
+* An **OpenAI API Key** (or compatible LLM provider key)
+
 ### 1. Clone the Repository
 ```bash
 git clone [https://github.com/Atif717/skylark-bi-agent.git](https://github.com/Atif717/skylark-bi-agent.git)
 cd skylark-bi-agent
+```
 
-2. Set Up Virtual Environment  Bash# Windows
+### 2. Set Up Virtual Environment
+```bash
+# Windows
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\activate
 
 # macOS / Linux
 python3 -m venv venv
 source venv/bin/activate
-3. Install Dependencies  Bashpip install -r requirements.txt
-4. Configure Environment VariablesCreate a .env file in the root directory (refer to .env.example):Code snippetMONDAY_API_TOKEN=your_monday_personal_token
+```
+
+### 3. Install Dependencies
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 4. Configure Environment Variables
+Create a `.env` file in the root directory:
+```env
+MONDAY_API_TOKEN=your_monday_personal_token
 DEALS_BOARD_ID=5030967387
 WORK_ORDERS_BOARD_ID=5030967210
 OPENAI_API_KEY=your_openai_api_key
 LLM_PROVIDER=openai
-🧪 Running the Test SuiteRun the full automated test suite covering normalizer edge cases, client connectivity, and agent tool execution:Bashpython -m pytest tests/
-🖥️ Running the ApplicationLaunch the Streamlit interface locally:Bashstreamlit run app.py
-Access the application in your browser at http://localhost:8501.⚙️ Connecting Your Own Monday.com BoardsTo plug in custom Monday.com boards:Obtain your API token from Monday.com $\rightarrow$ Developer Section $\rightarrow$ API.Find your Board IDs from your board's URL: https://your-team.monday.com/boards/<BOARD_ID>.Update DEALS_BOARD_ID and WORK_ORDERS_BOARD_ID in your .env (or Streamlit Cloud Secrets).If your imported column structure generates custom internal IDs, update DEALS_SCHEMA and WORK_ORDERS_SCHEMA in data_processing/schema.py to match the column IDs.☁️ Deployment (Streamlit Community Cloud)Fork/push this repository to your GitHub account.Visit share.streamlit.io and create a New app.Select this repository and set the main entry file to app.py.In Advanced Settings $\rightarrow$ Secrets, paste the following:Ini, TOMLMONDAY_API_TOKEN = "your_monday_personal_token"
-DEALS_BOARD_ID = "5030967387"
-WORK_ORDERS_BOARD_ID = "5030967210"
-OPENAI_API_KEY = "your_openai_api_key"
-LLM_PROVIDER = "openai"
-Click Deploy.📁 Repository Structureskylark-bi-agent/
+```
+
+### 5. Run the Automated Tests
+```bash
+python -m pytest tests/
+```
+
+### 6. Launch the Streamlit Application
+```bash
+streamlit run app.py
+```
+Open `http://localhost:8501` in your browser.
+
+---
+
+## ⚙️ Connecting Your Own Monday.com Boards
+
+To plug in custom Monday.com boards:
+
+1. Obtain your API token from **Monday.com $\rightarrow$ Developer Section $\rightarrow$ API**.
+2. Find your **Board IDs** from your board's URL: `https://your-team.monday.com/boards/<BOARD_ID>`.
+3. Update `DEALS_BOARD_ID` and `WORK_ORDERS_BOARD_ID` in your `.env` (or Streamlit Cloud Secrets).
+4. If your imported column structure generates custom internal IDs, update `DEALS_SCHEMA` and `WORK_ORDERS_SCHEMA` in `data_processing/schema.py` to match the column IDs.
+
+---
+
+## ☁️ Deployment (Streamlit Community Cloud)
+
+1. Fork/push this repository to your GitHub account.
+2. Visit [share.streamlit.io](https://share.streamlit.io/) and create a **New app**.
+3. Select this repository and set the main entry file to `app.py`.
+4. In **Advanced Settings $\rightarrow$ Secrets**, paste the following:
+   ```toml
+   MONDAY_API_TOKEN = "your_monday_personal_token"
+   DEALS_BOARD_ID = "5030967387"
+   WORK_ORDERS_BOARD_ID = "5030967210"
+   OPENAI_API_KEY = "your_openai_api_key"
+   LLM_PROVIDER = "openai"
+   ```
+5. Click **Deploy**.
+
+---
+
+## 📁 Repository Structure
+
+```
+skylark-bi-agent/
 ├── agent/
 │   ├── __init__.py
 │   ├── llm_client.py       # LLM provider wrapper
@@ -109,3 +168,4 @@ Click Deploy.📁 Repository Structureskylark-bi-agent/
 ├── pytest.ini              # Test runner configuration
 ├── requirements.txt        # Runtime dependencies
 └── README.md
+```
