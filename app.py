@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import sys
 import os
@@ -18,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling & Autoscroll Anchor Behavior
+# Custom Styling
 st.markdown("""
 <style>
     .stApp {
@@ -40,7 +41,6 @@ st.markdown("""
         padding: 16px;
         margin-bottom: 12px;
     }
-    /* Smooth scrolling behavior on main app container */
     [data-testid="stMain"] {
         scroll-behavior: smooth;
     }
@@ -49,27 +49,27 @@ st.markdown("""
 
 
 def scroll_to_bottom():
-    """Injects JavaScript directly into the DOM to scroll to the newest message."""
-    st.markdown(
+    """
+    Scrolls the chat container to the bottom.
+    Must use components.html (real iframe) — st.markdown's <script> tags
+    are inserted via innerHTML and browsers never execute those.
+    """
+    components.html(
         """
-        <div id="end-of-chat"></div>
         <script>
-            function smoothScrollBottom() {
-                const target = window.parent.document.getElementById('end-of-chat') || document.getElementById('end-of-chat');
-                if (target) {
-                    target.scrollIntoView({ behavior: 'smooth', block: 'end' });
-                } else {
-                    const scrollContainer = window.parent.document.querySelector('[data-testid="stMain"]') || window.parent.document.querySelector('section.main');
-                    if (scrollContainer) {
-                        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-                    }
+            function scrollToBottom() {
+                const doc = window.parent.document;
+                const container = doc.querySelector('[data-testid="stMain"]')
+                                || doc.querySelector('section.main');
+                if (container) {
+                    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
                 }
             }
-            setTimeout(smoothScrollBottom, 50);
-            setTimeout(smoothScrollBottom, 250);
+            setTimeout(scrollToBottom, 100);
+            setTimeout(scrollToBottom, 350);
         </script>
         """,
-        unsafe_allow_html=True
+        height=0,
     )
 
 
@@ -81,7 +81,10 @@ if "force_refresh" not in st.session_state:
 
 # Sidebar Configuration
 with st.sidebar:
-    st.image("https://img.icons8.com/nolan/96/eagle.png", width=64)
+    st.markdown(
+        "<div style='font-size:48px; line-height:1; margin-bottom:4px;'>🦅</div>",
+        unsafe_allow_html=True
+    )
     st.title("BI Controls")
     st.markdown("---")
 
@@ -94,7 +97,7 @@ with st.sidebar:
     st.subheader("📊 Leadership BI Actions")
     if st.button("👑 Prepare Leadership Update", use_container_width=True):
         st.session_state.messages.append({
-            "role": "user", 
+            "role": "user",
             "content": "Prepare this week's leadership update report."
         })
         st.rerun()
@@ -109,7 +112,7 @@ with st.sidebar:
         index=default_idx
     )
     llm_model = st.text_input("LLM Model", value=settings.LLM_MODEL)
-    
+
     st.markdown("---")
     st.caption("Active Board IDs:")
     st.caption(f"Deals: `{settings.DEALS_BOARD_ID}`")
@@ -126,7 +129,7 @@ orchestrator = AgentOrchestrator(
 # Fetch cached DataFrames from session state
 try:
     deals_df, wo_df = InSessionCache.get_dataframes(
-        orchestrator=orchestrator, 
+        orchestrator=orchestrator,
         force_refresh=st.session_state.force_refresh
     )
     st.session_state.force_refresh = False
@@ -151,10 +154,10 @@ with tab_chat:
             if "data" in msg and msg["data"] is not None:
                 st.dataframe(msg["data"], use_container_width=True)
 
-    # Handle quick-action trigger if last message was from user
+    # Handle quick-action trigger if last message was from user (e.g. sidebar buttons)
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         user_query = st.session_state.messages[-1]["content"]
-        
+
         # Only answer if assistant has not already appended a response
         if len(st.session_state.messages) % 2 != 0:
             with st.chat_message("assistant"):
@@ -164,17 +167,13 @@ with tab_chat:
                     df_res = response.get("data")
                     if df_res is not None:
                         st.dataframe(df_res, use_container_width=True)
-                    
+
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": response["answer"],
                         "data": df_res
                     })
-            scroll_to_bottom()
             st.rerun()
-
-    # Anchor at the end of the history
-    scroll_to_bottom()
 
 with tab_preview:
     col1, col2 = st.columns(2)
@@ -182,7 +181,7 @@ with tab_preview:
         st.subheader("Deals Board Data")
         st.metric("Total Deal Items", len(deals_df))
         st.dataframe(deals_df, use_container_width=True)
-        
+
     with col2:
         st.subheader("Work Orders Board Data")
         st.metric("Total Work Order Items", len(wo_df))
@@ -237,4 +236,8 @@ if prompt := st.chat_input("Ask a question about deals or project executions..."
                     "content": response["answer"],
                     "data": df_res
                 })
-        scroll_to_bottom()
+    st.rerun()
+
+# Single autoscroll call, executed after everything above has rendered
+# for this run (whole history + any newly appended message).
+scroll_to_bottom()
