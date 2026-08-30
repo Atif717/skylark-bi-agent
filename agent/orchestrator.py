@@ -156,11 +156,11 @@ class AgentOrchestrator:
             if not decision:
                 # Fallback rule-based matching if LLM quota exceeded or invalid response
                 q_lower = user_query.lower().strip()
-                if any(k in q_lower for k in ["leadership", "update", "summary", "brief", "overview", "report"]):
+                if any(k in q_lower for k in ["summarize", "summary", "leadership", "update", "brief", "overview", "report"]):
                     decision = {"tool": "generate_leadership_summary", "parameters": {}}
                 elif any(k in q_lower for k in ["join", "linked", "connected", "combine"]):
                     decision = {"tool": "join_deals_and_orders", "parameters": {}}
-                elif any(k in q_lower for k in ["sum", "total", "aggregate", "average", "mean"]):
+                elif bool(re.search(r"\b(sum|total|aggregate|average|mean)\b", q_lower)):
                     decision = {"tool": "aggregate", "parameters": {"group_by": "sector", "metric": "deal_value"}}
                 elif any(k in q_lower for k in ["work order", "execution", "project", "order"]):
                     decision = {"tool": "filter_work_orders", "parameters": {}}
@@ -176,7 +176,7 @@ class AgentOrchestrator:
         tool = decision.get("tool")
         params = decision.get("parameters", {})
 
-        # Handle clarifying questions directly (Step 6 requirement)
+        # Handle clarifying questions directly
         if tool == "ask_clarifying_question":
             return {
                 "answer": params.get("question", "Could you please clarify your request?"),
@@ -211,19 +211,25 @@ class AgentOrchestrator:
                 group_col = params.get("group_by", "sector")
                 metric_col = params.get("metric", "deal_value")
                 
-                # Check metric location first to select the correct board
-                if metric_col in wo_df.columns and metric_col not in deals_df.columns:
+                # Check metric and group column availability across datasets
+                if metric_col in wo_df.columns:
                     target_df = wo_df
                     target_reports = wo_quality["reports"]
-                elif metric_col in deals_df.columns and metric_col not in wo_df.columns:
+                    if group_col not in wo_df.columns:
+                        group_col = "sector" if "sector" in wo_df.columns else "execution_status"
+                elif metric_col in deals_df.columns:
                     target_df = deals_df
                     target_reports = deals_quality["reports"]
+                    if group_col not in deals_df.columns:
+                        group_col = "sector" if "sector" in deals_df.columns else "deal_status"
                 elif group_col in deals_df.columns:
                     target_df = deals_df
                     target_reports = deals_quality["reports"]
+                    metric_col = "deal_value"
                 else:
                     target_df = wo_df
                     target_reports = wo_quality["reports"]
+                    metric_col = "amount_excl_gst"
                     
                 res = tools.aggregate(
                     df=target_df,
