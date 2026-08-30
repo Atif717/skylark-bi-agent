@@ -6,26 +6,41 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
+
 class LLMClient:
     """
-    Unified LLM wrapper to interface with OpenAI and Anthropic client APIs.
+    Unified LLM wrapper to interface with Groq, OpenAI, and Anthropic client APIs.
     Includes a deterministic mock responder to support testing and offline runs.
     """
-    def __init__(self, provider: str, api_key: str, model: str):
-        self.provider = provider.lower()
+    def __init__(self, provider: str = "openai", api_key: str = None, model: str = None):
+        self.provider = (provider or "openai").lower().strip()
         self.api_key = api_key
         self.model = model
-        
+
         # Determine if we should run in mock mode
-        self.is_mock = not api_key or "mock" in api_key.lower() or api_key == "mock_openai_api_key" or api_key == "mock_anthropic_api_key"
+        self.is_mock = (
+            not self.api_key
+            or "mock" in self.api_key.lower()
+            or self.api_key in ("mock_openai_api_key", "mock_anthropic_api_key")
+        )
 
         if not self.is_mock:
-            if self.provider == "openai":
+            if self.provider == "groq":
+                self.model = self.model or "llama-3.3-70b-versatile"
+                self.client = OpenAI(
+                    api_key=self.api_key,
+                    base_url="https://api.groq.com/openai/v1"
+                )
+            elif self.provider == "openai":
+                self.model = self.model or "gpt-4o"
                 self.client = OpenAI(api_key=self.api_key)
             elif self.provider == "anthropic":
+                self.model = self.model or "claude-3-5-sonnet-20240620"
                 self.client = Anthropic(api_key=self.api_key)
             else:
-                raise ValueError(f"Unsupported LLM provider: {self.provider}")
+                # Default to OpenAI compatible interface
+                self.model = self.model or "gpt-4o"
+                self.client = OpenAI(api_key=self.api_key)
         else:
             logger.info("LLMClient is active in MOCK mode.")
 
@@ -36,7 +51,7 @@ class LLMClient:
         if self.is_mock:
             return self._mock_llm_response(user_prompt)
 
-        if self.provider == "openai":
+        if self.provider in ("openai", "groq"):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -49,8 +64,20 @@ class LLMClient:
                 )
                 return response.choices[0].message.content
             except Exception as e:
-                logger.error(f"OpenAI completion request failed: {e}")
-                raise RuntimeError(f"OpenAI API Error: {e}")
+                logger.error(f"{self.provider.upper()} completion request failed: {e}")
+                # Retry once without response_format if provider threw a schema error
+                try:
+                    fallback_resp = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.0
+                    )
+                    return fallback_resp.choices[0].message.content
+                except Exception as fallback_err:
+                    raise RuntimeError(f"{self.provider.upper()} API Error: {fallback_err}")
 
         elif self.provider == "anthropic":
             try:
@@ -76,7 +103,7 @@ class LLMClient:
         """
         prompt_lower = user_prompt.lower()
 
-        # Step 1: Detect ambiguity (Test agent behavior with intentionally ambiguous queries)
+        # Step 1: Detect ambiguity
         if "quarter" in prompt_lower and not ("calendar" in prompt_lower or "fiscal" in prompt_lower):
             return json.dumps({
                 "thought": "The user referenced 'quarter' without clarifying calendar or fiscal context. I must ask a clarifying question.",
@@ -85,7 +112,7 @@ class LLMClient:
                     "question": "Could you please clarify if you mean the **calendar quarter** or **fiscal quarter** for this pipeline query?"
                 }
             })
-            
+
         if "revenue" in prompt_lower and not any(k in prompt_lower for k in ["billed", "realized", "collected", "received", "receivables"]):
             return json.dumps({
                 "thought": "The user requested revenue metrics without specifying billed, collected, or contract value. Asking clarifying question.",
@@ -98,7 +125,6 @@ class LLMClient:
         # Step 2: Handle second turn (compiling the final markdown answer with data metrics)
         if "execution_result" in prompt_lower or "data_context" in prompt_lower or "tool_result" in prompt_lower or "stats" in prompt_lower:
             if "stats" in prompt_lower:
-                # Leadership Summary response
                 return json.dumps({
                     "thought": "Generating leadership final narrative answer.",
                     "tool": "final_answer",
@@ -107,7 +133,6 @@ class LLMClient:
                     }
                 })
             else:
-                # Standard final answer formatting
                 return json.dumps({
                     "thought": "Compiling final table explanation.",
                     "tool": "final_answer",
@@ -133,7 +158,7 @@ class LLMClient:
             dataset = "deals" if "deal" in prompt_lower else "work_orders"
             group_by = "sector" if "sector" in prompt_lower else "deal_status"
             agg_col = "deal_value" if dataset == "deals" else "amount_excl_gst"
-            
+
             return json.dumps({
                 "thought": f"User requested aggregation grouping by {group_by}. Invoking aggregate tool.",
                 "tool": "aggregate",
@@ -152,7 +177,6 @@ class LLMClient:
                 }
             })
         else:
-            # Default helper query
             return json.dumps({
                 "thought": "Querying deals list based on user query.",
                 "tool": "filter_deals",
