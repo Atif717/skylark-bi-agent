@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
 CACHE_TTL = 300  # Cache TTL: 5 minutes
+MAX_HISTORY_TURNS = 6  # How many prior chat turns to feed back to the LLM for context
 
 
 def _parse_llm_json(raw_text: str) -> dict:
@@ -73,7 +74,7 @@ class AgentOrchestrator:
 
         self.llm_client = LLMClient(provider=self.provider, api_key=api_key, model=self.model)
         self.monday_client = MondayClient(api_token=settings.MONDAY_API_TOKEN)
-        
+
         os.makedirs(CACHE_DIR, exist_ok=True)
 
     def get_deals_dataframe(self, force_refresh=False) -> pd.DataFrame:
@@ -81,7 +82,7 @@ class AgentOrchestrator:
         Loads Deals from cache if within TTL, else fetches from Monday API and updates cache.
         """
         cache_path = os.path.join(CACHE_DIR, "deals.json")
-        
+
         if not force_refresh and os.path.exists(cache_path):
             mtime = os.path.getmtime(cache_path)
             if time.time() - mtime < CACHE_TTL:
@@ -107,7 +108,7 @@ class AgentOrchestrator:
         Loads Work Orders from cache if within TTL, else fetches from Monday API and updates cache.
         """
         cache_path = os.path.join(CACHE_DIR, "work_orders.json")
-        
+
         if not force_refresh and os.path.exists(cache_path):
             mtime = os.path.getmtime(cache_path)
             if time.time() - mtime < CACHE_TTL:
@@ -127,6 +128,30 @@ class AgentOrchestrator:
             logger.warning(f"Failed to write work orders cache: {e}")
 
         return normalize_work_orders(raw_wo)
+
+    def _get_chat_history(self) -> list:
+        """
+        Pulls prior conversational turns from Streamlit session state, if available,
+        so the LLM (or the rule-based fallback) can resolve follow-ups and answers
+        to its own earlier clarifying questions instead of treating every message
+        as an isolated, context-free query.
+
+        Deliberately best-effort: if Streamlit isn't available (e.g. unit tests,
+        a non-Streamlit caller) this just returns an empty history and the
+        orchestrator behaves exactly as it did before — nothing else depends on it.
+        """
+        try:
+            import streamlit as st
+            msgs = st.session_state.get("messages", [])
+        except Exception:
+            return []
+
+        # The current user query has already been appended to session_state by the
+        # caller before answer_query runs, so drop the last entry to avoid sending
+        # it twice (once via history, once via the explicit user_prompt below).
+        trimmed = msgs[:-1] if msgs else []
+        trimmed = trimmed[-MAX_HISTORY_TURNS:]
+        return [{"role": m.get("role"), "content": m.get("content")} for m in trimmed if m.get("content")]
 
     def answer_query(self, user_query: str) -> dict:
         """
@@ -148,24 +173,18 @@ class AgentOrchestrator:
         wo_quality = check_data_quality(wo_df, "Work Orders Board")
 
         user_prompt = f"User Question: {user_query}"
-        
+        chat_history = self._get_chat_history()
+
         try:
-            llm_text = self.llm_client.call_llm(SYSTEM_PROMPT, user_prompt)
+            llm_text = self.llm_client.call_llm(SYSTEM_PROMPT, user_prompt, history=chat_history)
             decision = _parse_llm_json(llm_text)
-            
+
             if not decision:
-                # Fallback rule-based matching if LLM quota exceeded or invalid response
-                q_lower = user_query.lower().strip()
-                if any(k in q_lower for k in ["summarize", "summary", "leadership", "update", "brief", "overview", "report"]):
-                    decision = {"tool": "generate_leadership_summary", "parameters": {}}
-                elif any(k in q_lower for k in ["join", "linked", "connected", "combine"]):
-                    decision = {"tool": "join_deals_and_orders", "parameters": {}}
-                elif bool(re.search(r"\b(sum|total|aggregate|average|mean)\b", q_lower)):
-                    decision = {"tool": "aggregate", "parameters": {"group_by": "sector", "metric": "deal_value"}}
-                elif any(k in q_lower for k in ["work order", "execution", "project", "order"]):
-                    decision = {"tool": "filter_work_orders", "parameters": {}}
-                else:
-                    decision = {"tool": "filter_deals", "parameters": {}}
+                # If the LLM returned something unparseable, fall back to the
+                # same deterministic, history-aware rule engine used when no
+                # provider is reachable at all.
+                fallback_text = self.llm_client._mock_llm_response(user_query, chat_history)
+                decision = _parse_llm_json(fallback_text)
         except Exception as e:
             logger.error(f"Error calling LLM: {e}")
             return {
@@ -174,7 +193,7 @@ class AgentOrchestrator:
             }
 
         tool = decision.get("tool")
-        params = decision.get("parameters", {})
+        params = decision.get("parameters", {}) or {}
 
         # Handle clarifying questions directly
         if tool == "ask_clarifying_question":
@@ -193,7 +212,8 @@ class AgentOrchestrator:
         # Tool Execution Stage
         result_df = None
         caveats = "None flagged."
-        
+        override_note = ""
+
         try:
             if tool == "filter_deals":
                 res = tools.filter_deals(deals_df, deals_quality["reports"], **params)
@@ -210,27 +230,32 @@ class AgentOrchestrator:
             elif tool == "aggregate":
                 group_col = params.get("group_by", "sector")
                 metric_col = params.get("metric", "deal_value")
-                
-                # Check metric and group column availability across datasets
+
+                # Decide which board this aggregation actually belongs on. The metric
+                # column is the more specific signal (deal_value only exists on Deals,
+                # amount_excl_gst-style columns only exist on Work Orders), so it takes
+                # priority; group_by is then validated against whichever board wins.
                 if metric_col in wo_df.columns:
-                    target_df = wo_df
-                    target_reports = wo_quality["reports"]
-                    if group_col not in wo_df.columns:
-                        group_col = "sector" if "sector" in wo_df.columns else "execution_status"
+                    target_df, target_reports, board_name = wo_df, wo_quality["reports"], "Work Orders"
                 elif metric_col in deals_df.columns:
-                    target_df = deals_df
-                    target_reports = deals_quality["reports"]
-                    if group_col not in deals_df.columns:
-                        group_col = "sector" if "sector" in deals_df.columns else "deal_status"
-                elif group_col in deals_df.columns:
-                    target_df = deals_df
-                    target_reports = deals_quality["reports"]
-                    metric_col = "deal_value"
-                else:
-                    target_df = wo_df
-                    target_reports = wo_quality["reports"]
+                    target_df, target_reports, board_name = deals_df, deals_quality["reports"], "Deals"
+                elif group_col in wo_df.columns:
+                    target_df, target_reports, board_name = wo_df, wo_quality["reports"], "Work Orders"
                     metric_col = "amount_excl_gst"
-                    
+                else:
+                    target_df, target_reports, board_name = deals_df, deals_quality["reports"], "Deals"
+                    metric_col = "deal_value"
+
+                if group_col not in target_df.columns:
+                    fallback_group = "sector" if "sector" in target_df.columns else (
+                        "deal_status" if board_name == "Deals" else "execution_status"
+                    )
+                    override_note = (
+                        f"Requested grouping column '{group_col}' isn't on the {board_name} board — "
+                        f"grouped by '{fallback_group}' instead."
+                    )
+                    group_col = fallback_group
+
                 res = tools.aggregate(
                     df=target_df,
                     quality_reports=target_reports,
@@ -244,9 +269,9 @@ class AgentOrchestrator:
                 res = tools.generate_leadership_summary(deals_df, wo_df, deals_quality["reports"], wo_quality["reports"])
                 stats = res["stats"]
                 caveats = res["caveats"]
-                
+
                 top_sectors = "\n".join([f"- **{r.get('sector', 'Unknown')}**: ${r.get('deal_value', 0):,.2f}" for r in stats.get("pipeline_by_sector", [])[:3]])
-                
+
                 summary_narrative = (
                     f"### 📈 Executive Leadership BI Summary\n\n"
                     f"#### 💼 Sales Pipeline Overview\n"
@@ -259,10 +284,10 @@ class AgentOrchestrator:
                     f"- **Total Billed (Excl. GST)**: ${stats.get('revenue_billed_excl_gst', 0):,.2f}\n"
                     f"- **Total Collected (Incl. GST)**: ${stats.get('revenue_collected_incl_gst', 0):,.2f}"
                 )
-                
+
                 if caveats:
                     summary_narrative += f"\n\n---\n> ⚠️ *{caveats}*"
-                    
+
                 display_df = pd.DataFrame(stats["pipeline_by_sector"]) if stats.get("pipeline_by_sector") else None
                 return {
                     "answer": summary_narrative,
@@ -273,6 +298,14 @@ class AgentOrchestrator:
                     "answer": f"⚠️ Unsupported Agent Tool: {tool}",
                     "data": None
                 }
+        except ValueError as e:
+            # Column-not-found style errors from tools.aggregate — surface clearly
+            # instead of a generic runtime exception message.
+            logger.warning(f"Aggregate parameter error: {e}")
+            return {
+                "answer": f"⚠️ {e} Try rephrasing with one of the supported grouping or metric columns.",
+                "data": None
+            }
         except Exception as e:
             logger.exception("Failed executing requested tool.")
             return {
@@ -280,11 +313,13 @@ class AgentOrchestrator:
                 "data": None
             }
 
-        # Build clean final answer
-        answer = "Query completed. Data table displayed below."
-        if caveats and caveats not in answer:
+        # Build a data-driven final answer instead of a static placeholder string.
+        answer = tools.build_insight_narrative(tool, result_df, params)
+        if override_note:
+            answer += f"\n\n_Note: {override_note}_"
+        if caveats and "no significant" not in caveats.lower():
             answer += f"\n\n---\n> ⚠️ *{caveats}*"
-            
+
         return {
             "answer": answer,
             "data": result_df

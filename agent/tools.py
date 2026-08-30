@@ -89,6 +89,7 @@ def filter_work_orders(
 def join_deals_and_orders(deals_df: pd.DataFrame, wo_df: pd.DataFrame, deals_reports: list, wo_reports: list, **kwargs) -> dict:
     """
     Joins Deals and Work Orders boards on the common entity name ('name').
+    Optional kwargs: deal_status, execution_status (or status), sector.
     """
     if deals_df.empty or wo_df.empty:
         return {"data": pd.DataFrame(), "caveats": "Cannot join; empty boards."}
@@ -96,19 +97,44 @@ def join_deals_and_orders(deals_df: pd.DataFrame, wo_df: pd.DataFrame, deals_rep
     d = deals_df.copy()
     w = wo_df.copy()
 
-    # Join on the common entity name
-    merged = pd.merge(
-        d,
-        w,
-        on="name",
-        how="inner",
-        suffixes=("_deal", "_wo")
-    )
+    # Join key: the Deals board's item name ("name") is the human-readable deal
+    # name (e.g. "Naruto"). On the Work Orders board that same deal name is
+    # stored in the "deal_name" column, while Work Orders' own "name" column is
+    # a separate item identifier for the execution record itself. Joining on
+    # "name" == "name" (both boards happen to have a column with that label)
+    # compares two unrelated identifiers and silently returns zero matches.
+    if "deal_name" in w.columns:
+        merged = pd.merge(
+            d,
+            w,
+            left_on="name",
+            right_on="deal_name",
+            how="inner",
+            suffixes=("_deal", "_wo")
+        )
+        # Both frames also have their own "name" column (deal name vs. WO item
+        # name), so pandas suffixes those into name_deal / name_wo. Restore a
+        # single clean "name" column for display and downstream filters.
+        rename_map = {}
+        if "name_deal" in merged.columns:
+            rename_map["name_deal"] = "name"
+        if "name_wo" in merged.columns:
+            rename_map["name_wo"] = "wo_item_name"
+        if rename_map:
+            merged = merged.rename(columns=rename_map)
+    else:
+        # Fallback for older/differently-shaped exports that lack deal_name.
+        merged = pd.merge(
+            d,
+            w,
+            on="name",
+            how="inner",
+            suffixes=("_deal", "_wo")
+        )
 
     # If the user asked for ongoing work orders or open deals, filter gracefully:
     # (Checking if filters were passed via kwargs or filtering directly)
     if "deal_status" in merged.columns:
-        # Keep open deals if specified in kwargs
         deal_status_filter = kwargs.get("deal_status")
         if deal_status_filter:
             merged = merged[merged["deal_status"].astype(str).str.lower() == str(deal_status_filter).lower().strip()]
@@ -121,6 +147,15 @@ def join_deals_and_orders(deals_df: pd.DataFrame, wo_df: pd.DataFrame, deals_rep
                 merged = merged[merged["execution_status"].astype(str).str.lower().isin(["ongoing", "executed until current month"])]
             else:
                 merged = merged[merged["execution_status"].astype(str).str.lower().str.contains(tgt, na=False)]
+
+    # Sector exists on both boards, so after merge it's suffixed sector_deal / sector_wo.
+    sector_filter = kwargs.get("sector")
+    if sector_filter:
+        tgt_sector = str(sector_filter).lower().strip()
+        if "sector_deal" in merged.columns:
+            merged = merged[merged["sector_deal"].astype(str).str.lower() == tgt_sector]
+        elif "sector_wo" in merged.columns:
+            merged = merged[merged["sector_wo"].astype(str).str.lower() == tgt_sector]
 
     # Select clean representative columns for UI display
     cols_to_show = [
@@ -137,6 +172,7 @@ def join_deals_and_orders(deals_df: pd.DataFrame, wo_df: pd.DataFrame, deals_rep
         "data": display_df,
         "caveats": caveats
     }
+
 
 def aggregate(
     df: pd.DataFrame,
@@ -171,6 +207,7 @@ def aggregate(
 
     grouped = df_temp.groupby(gb_key)[metric_key].agg(agg_func).reset_index()
     grouped.columns = [gb_key, f"{agg_func}_of_{metric_key}"]
+    grouped = grouped.sort_values(by=f"{agg_func}_of_{metric_key}", ascending=False).reset_index(drop=True)
 
     caveats = _extract_quality_caveats(quality_reports, f"Aggregation on {group_by}")
     return {
@@ -231,6 +268,74 @@ def generate_leadership_summary(
         "stats": stats,
         "caveats": caveats
     }
+
+
+def build_insight_narrative(tool: str, result_df: pd.DataFrame, params: dict = None) -> str:
+    """
+    Produces a short, data-driven natural language insight from a tool's result.
+    This runs entirely in pandas (no LLM call), so it's always available even if
+    every LLM provider is rate-limited or unreachable, and it never contradicts
+    the data actually shown in the table below it.
+    """
+    params = params or {}
+
+    if result_df is None or result_df.empty:
+        return "No matching records were found for this query — try broadening the filters or double-check the values you're looking for."
+
+    n = len(result_df)
+
+    if tool == "filter_deals":
+        lines = [f"Found **{n} deal{'s' if n != 1 else ''}** matching your criteria."]
+        if "deal_value" in result_df.columns:
+            total = result_df["deal_value"].sum()
+            lines.append(f"Combined pipeline value: **${total:,.2f}**.")
+        if "sector" in result_df.columns and result_df["sector"].nunique() > 1 and "deal_value" in result_df.columns:
+            top_sector = result_df.groupby("sector")["deal_value"].sum().sort_values(ascending=False)
+            lines.append(f"Top sector by value: **{top_sector.index[0]}** (${top_sector.iloc[0]:,.2f}).")
+        if "deal_status" in result_df.columns:
+            status_counts = result_df["deal_status"].value_counts().head(3)
+            summary = ", ".join(f"{v} {k}" for k, v in status_counts.items())
+            lines.append(f"Status breakdown: {summary}.")
+        return " ".join(lines)
+
+    if tool == "filter_work_orders":
+        lines = [f"Found **{n} work order{'s' if n != 1 else ''}** matching your criteria."]
+        if "execution_status" in result_df.columns:
+            status_counts = result_df["execution_status"].value_counts().head(3)
+            summary = ", ".join(f"{v} {k}" for k, v in status_counts.items())
+            lines.append(f"Execution status breakdown: {summary}.")
+        if "amount_excl_gst" in result_df.columns:
+            total = result_df["amount_excl_gst"].sum()
+            lines.append(f"Total order value (excl. GST): **${total:,.2f}**.")
+        if "collected_incl_gst" in result_df.columns:
+            collected = result_df["collected_incl_gst"].sum()
+            lines.append(f"Collected so far (incl. GST): **${collected:,.2f}**.")
+        return " ".join(lines)
+
+    if tool == "join_deals_and_orders":
+        lines = [f"**{n} deal{'s' if n != 1 else ''}** have linked work order records."]
+        if "execution_status" in result_df.columns:
+            statuses = result_df["execution_status"].astype(str).str.lower()
+            ongoing = statuses.isin(["ongoing", "executed until current month"]).sum()
+            completed = (statuses == "completed").sum()
+            lines.append(f"Of these, **{ongoing}** are actively executing and **{completed}** are completed.")
+        return " ".join(lines)
+
+    if tool == "aggregate":
+        metric_cols = [c for c in result_df.columns if c.startswith(("sum_of_", "mean_of_", "count_of_"))]
+        if metric_cols:
+            metric_col = metric_cols[0]
+            group_col = [c for c in result_df.columns if c != metric_col][0]
+            sorted_df = result_df.sort_values(by=metric_col, ascending=False).reset_index(drop=True)
+            top = sorted_df.iloc[0]
+            lines = [f"Across **{n}** group{'s' if n != 1 else ''}, **{top[group_col]}** leads with **{top[metric_col]:,.2f}**."]
+            if n > 1:
+                second = sorted_df.iloc[1]
+                lines.append(f"Followed by **{second[group_col]}** at **{second[metric_col]:,.2f}**.")
+            return " ".join(lines)
+        return f"Returned {n} aggregated rows."
+
+    return f"Query completed — {n} row{'s' if n != 1 else ''} returned."
 
 
 def _extract_quality_caveats(reports: list, context_name: str) -> str:
